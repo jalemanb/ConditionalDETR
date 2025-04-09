@@ -30,7 +30,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
-        self.prepare = ConvertCocoPolysToMask(return_masks)
+        self.prepare = ConvertCocoPolysToMask(return_masks = return_masks, k = 10)
 
     def __getitem__(self, idx):
         img, target = super(CocoDetection, self).__getitem__(idx)
@@ -60,29 +60,36 @@ def convert_coco_poly_to_mask(segmentations, height, width):
         masks = torch.zeros((0, height, width), dtype=torch.uint8)
     return masks
 
-
-def generate_random_boxes(k, image_width, image_height, min_aspect_ratio=0.3):
+def box_iou(boxes1, boxes2):
     """
-    Generate k valid random bounding boxes (x1, y1, x2, y2) within image bounds,
-    each with a minimum aspect ratio constraint.
-
-    Args:
-        k (int): Number of boxes
-        image_width (int): Width of the image
-        image_height (int): Height of the image
-        min_aspect_ratio (float): Minimum allowed aspect ratio (w/h or h/w)
-
+    Compute IoU between two sets of boxes.
+    boxes1: [N, 4]
+    boxes2: [M, 4]
     Returns:
-        boxes (torch.Tensor): shape [k, 4]
-        areas (torch.Tensor): shape [k]
-        iscrowd (torch.Tensor): shape [k, 1]
+        ious: [N, M]
+    """
+    area1 = (boxes1[:, 2] - boxes1[:, 0]) * (boxes1[:, 3] - boxes1[:, 1])
+    area2 = (boxes2[:, 2] - boxes2[:, 0]) * (boxes2[:, 3] - boxes2[:, 1])
+
+    lt = torch.max(boxes1[:, None, :2], boxes2[:, :2])  # top-left
+    rb = torch.min(boxes1[:, None, 2:], boxes2[:, 2:])  # bottom-right
+
+    wh = (rb - lt).clamp(min=0)  # intersection width-height
+    inter = wh[:, :, 0] * wh[:, :, 1]
+
+    union = area1[:, None] + area2 - inter
+
+    return inter / union.clamp(min=1e-6)
+
+def generate_nonoverlapping_boxes(k, image_width, image_height, existing_boxes, min_aspect_ratio=0.3, iou_threshold=0.1):
+    """
+    Generate k random boxes that have IoU < iou_threshold with all existing_boxes.
     """
     boxes = []
-    max_tries = 50 * k  # Try more if aspect ratio filtering is involved
-
-    k = random.randint(2, k)
-
+    max_tries = 100 * k
     tries = 0
+    existing_boxes = existing_boxes.clone()
+
     while len(boxes) < k and tries < max_tries:
         tries += 1
 
@@ -99,36 +106,33 @@ def generate_random_boxes(k, image_width, image_height, min_aspect_ratio=0.3):
         w = torch.randint(1, max_w, (1,)).item()
         h = torch.randint(1, max_h, (1,)).item()
 
-        # Check aspect ratio
-        aspect = max(w / h, h / w)  # force it to be >= 1
+        aspect = max(w / h, h / w)
         if aspect < 1 / min_aspect_ratio:
             x2 = x1 + w
             y2 = y1 + h
-            boxes.append([x1, y1, x2, y2])
+            candidate = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
 
-    if len(boxes) < k:
-        print(f"Warning: Only generated {len(boxes)} boxes after {tries} tries.")
+            if existing_boxes.numel() > 0:
+                ious = box_iou(candidate, existing_boxes)
+                if torch.all(ious < iou_threshold):
+                    boxes.append([x1, y1, x2, y2])
+            else:
+                boxes.append([x1, y1, x2, y2])
 
     boxes = torch.tensor(boxes, dtype=torch.float32)
     areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-    iscrowd = torch.zeros((boxes.shape[0], 1), dtype=torch.int64)
+    iscrowd = torch.zeros((boxes.shape[0]), dtype=torch.int64)
+    labels = torch.zeros((boxes.shape[0]))
 
-    return boxes, areas, iscrowd
+    return boxes, areas, iscrowd, labels
 
 
 
 class ConvertCocoPolysToMask(object):
-    def __init__(self, return_masks=False):
+    def __init__(self, k = 10, return_masks=False):
         self.return_masks = return_masks
-        self.resnet18 = models.resnet18(pretrained=True)
-        self.resnet18.eval()
+        self.k = k
         # Transform for image patches
-        self.patch_transform = torchT.Compose([
-            torchT.Resize((224, 224)),
-            torchT.ToTensor(),
-            torchT.Normalize(mean=[0.485, 0.456, 0.406],
-                        std=[0.229, 0.224, 0.225])
-        ])
         self.patch_augmentation = torchT.Compose([
             torchT.Resize((128, 128)),  # Tight crop is assumed already
             torchT.RandomApply([
@@ -152,40 +156,34 @@ class ConvertCocoPolysToMask(object):
         anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
 
         # Default Classes and Bboxes
-        # boxes = [obj["bbox"] for obj in anno]
-        # # guard against no boxes via resizing
-        # boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        # boxes[:, 2:] += boxes[:, :2]
-        # boxes[:, 0::2].clamp_(min=0, max=w)
-        # boxes[:, 1::2].clamp_(min=0, max=h)
-        # classes = [obj["category_id"] for obj in anno]
+        boxes = [obj["bbox"] for obj in anno]
+        # guard against no boxes via resizing
+        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
+        boxes[:, 2:] += boxes[:, :2]
+        boxes[:, 0::2].clamp_(min=0, max=w)
+        boxes[:, 1::2].clamp_(min=0, max=h)
+        classes = [obj["category_id"] for obj in anno]
         # classes = torch.tensor(classes, dtype=torch.int64)
+        classes = torch.ones(boxes.shape[0], dtype=torch.int64)
 
-        # Get Random Crops in the image
-        boxes, area, iscrowd = generate_random_boxes(10, w, h)
+        fake_boxes, fake_areas, fake_iscrowd, fake_labels = generate_nonoverlapping_boxes(self.k // 2, w, h, boxes, min_aspect_ratio=0.3, iou_threshold=0.1)
         
+        boxes = torch.cat((boxes, fake_boxes), dim = 0)
+        classes = torch.cat((classes, fake_labels), dim = 0)
+
+        pick_k_boxes = np.minimum(torch.randint(1, self.k + 1, (1,)).item(), boxes.shape[0])
+
+        k_random_indices = torch.randperm(boxes.shape[0])[:pick_k_boxes]
+
         #  Extract the patches and normalize them to create the binary labels object/no object
-        patches = []
         templates = []
-        for box in boxes:
+        for box in boxes[k_random_indices]:
             x1, y1, x2, y2 = box.int()
             patch = image.crop((x1.item(), y1.item(), x2.item(), y2.item()))  # Crop from PIL image
-            patch_class = self.patch_transform(patch)
             template = self.patch_augmentation(patch)
-            patches.append(patch_class)
             templates.append(template)
 
-        patch_batch = None
-        if patches:
-            patch_batch = torch.stack(patches)  # shape: [num_boxes, 3, 224, 224]
-            templates_batch = torch.stack(templates)  # shape: [num_boxes, 3, 128, 128]
-
-            with torch.no_grad():
-                outputs = self.resnet18(patch_batch)
-                probs = F.softmax(outputs, dim=1)
-                has_object = (probs.max(dim=1).values > 0.2).long()  # 1 if any class > threshold
-                classes = has_object.unsqueeze(1)  # shape: [num_boxes, 1]
-
+        templates_batch = torch.stack(templates)  # shape: [num_boxes, 3, 128, 128]
 
         if self.return_masks:
             segmentations = [obj["segmentation"] for obj in anno]
@@ -203,15 +201,15 @@ class ConvertCocoPolysToMask(object):
         boxes = boxes[keep]
         classes = classes[keep]
 
-
         if self.return_masks:
             masks = masks[keep]
+
         if keypoints is not None:
             keypoints = keypoints[keep]
 
         target = {}
-        target["boxes"] = boxes
-        target["labels"] = classes
+        target["boxes"] = boxes[k_random_indices]
+        target["labels"] = classes[k_random_indices]
         if self.return_masks:
             target["masks"] = masks
         target["image_id"] = image_id
@@ -219,11 +217,17 @@ class ConvertCocoPolysToMask(object):
             target["keypoints"] = keypoints
 
         # for conversion to coco api
-        # area = torch.tensor([obj["area"] for obj in anno])
-        # iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
+        area = torch.tensor([obj["area"] for obj in anno])
+        iscrowd = torch.tensor([obj["iscrowd"] if "iscrowd" in obj else 0 for obj in anno])
 
-        target["area"] = area[keep]
-        target["iscrowd"] = iscrowd[keep]
+        area = torch.cat((area, fake_areas), dim = 0)
+        iscrowd = torch.cat((iscrowd, fake_iscrowd), dim = 0)
+
+        area = area[keep]
+        iscrowd = iscrowd[keep]
+
+        target["area"] = area[k_random_indices]
+        target["iscrowd"] = iscrowd[k_random_indices]
 
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
         target["size"] = torch.as_tensor([int(h), int(w)])
