@@ -7,7 +7,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 # ------------------------------------------------------------------------
 
-from .conditional_detr import build
+from .fs_detr import build
 
 
 def build_model(args):

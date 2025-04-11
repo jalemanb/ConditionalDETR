@@ -39,9 +39,18 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
     for samples, templates, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device)
+        templates = [{k: v.to(device) for k, v in t.items()} for t in templates]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        try:
+            label2pseudo = model.select_random_pseudo_classes(templates)
+        except Exception:  # model is DDP
+            label2pseudo = model.module.select_random_pseudo_classes(templates)
+        outputs = model(samples, templates, label2pseudo)
+
+        for i, target in enumerate(targets):
+            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']])
+
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
