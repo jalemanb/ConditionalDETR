@@ -13,6 +13,7 @@ import json
 import random
 import time
 from pathlib import Path
+import wandb
 
 import numpy as np
 import torch
@@ -23,7 +24,6 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine_fs_detr import evaluate, train_one_epoch
 from models import build_model
-
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Set transformer detector', add_help=False)
@@ -111,8 +111,25 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     return parser
 
-
 def main(args):
+
+    # Start a new wandb run to track this script.
+    now = datetime.datetime.now()
+    run = wandb.init(
+        # Set the wandb entity where your project will be logged (generally your team name).
+        entity="ULTIMATE FS",
+        # Set the wandb project where this run will be logged.
+        project="Reimplementation of FS-DETR",
+        # Track hyperparameters and run metadata.
+        config={
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "dataset": "COCO",
+            "epochs": args.epochs,
+            "date_time":  now.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+
     utils.init_distributed_mode(args)
     print("git:\n  {}\n".format(utils.get_sha()))
 
@@ -229,6 +246,8 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
+        
+        run.log(log_stats)
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
@@ -244,7 +263,7 @@ def main(args):
                     for name in filenames:
                         torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                    output_dir / "eval" / name)
-
+    run.finish()
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))

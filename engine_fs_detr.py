@@ -106,11 +106,21 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
 
-    for samples, targets in metric_logger.log_every(data_loader, 10, header):
+    for samples, templates, targets in metric_logger.log_every(data_loader, 10, header):
+
         samples = samples.to(device)
+        templates = [{k: v.to(device) for k, v in t.items()} for t in templates]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
+        try:
+            label2pseudo = model.select_random_pseudo_classes(templates)
+        except Exception:  # model is DDP
+            label2pseudo = model.module.select_random_pseudo_classes(templates)
+        outputs = model(samples, templates, label2pseudo)
+
+        for i, target in enumerate(targets):
+            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']])
+
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 
