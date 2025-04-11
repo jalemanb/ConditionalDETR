@@ -86,7 +86,7 @@ def generate_nonoverlapping_boxes(k, image_width, image_height, existing_boxes, 
     Generate k random boxes that have IoU < iou_threshold with all existing_boxes.
     """
     boxes = []
-    max_tries = 100 * k
+    max_tries = 1000 * k
     tries = 0
     existing_boxes = existing_boxes.clone()
 
@@ -166,12 +166,12 @@ class ConvertCocoPolysToMask(object):
         # classes = torch.tensor(classes, dtype=torch.int64)
         classes = torch.ones(boxes.shape[0], dtype=torch.int64)
 
-        fake_boxes, fake_areas, fake_iscrowd, fake_labels = generate_nonoverlapping_boxes(self.k // 2, w, h, boxes, min_aspect_ratio=0.3, iou_threshold=0.1)
+        fake_boxes, fake_areas, fake_iscrowd, fake_labels = generate_nonoverlapping_boxes(self.k, w, h, boxes, min_aspect_ratio=0.3, iou_threshold=0.1)
         
         boxes = torch.cat((boxes, fake_boxes), dim = 0)
         classes = torch.cat((classes, fake_labels), dim = 0)
 
-        pick_k_boxes = np.minimum(torch.randint(1, self.k + 1, (1,)).item(), boxes.shape[0])
+        pick_k_boxes = self.k # np.minimum(torch.randint(1, self.k + 1, (1,)).item(), boxes.shape[0])
 
         k_random_indices = torch.randperm(boxes.shape[0])[:pick_k_boxes]
 
