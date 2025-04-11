@@ -9,22 +9,81 @@
 # Modified from Deformable DETR (https://github.com/fundamentalvision/Deformable-DETR)
 # Copyright (c) 2020 SenseTime. All Rights Reserved.
 # ------------------------------------------------------------------------
+from typing import Union, Tuple, Optional
 
 import math
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.init import trunc_normal_
 
 from util import box_ops
-from util.misc import (NestedTensor, nested_tensor_from_tensor_list,
+from util.misc import (NestedTensor, nested_tensor_from_tensor_list, nested_tensor_from_tensor,
                        accuracy, get_world_size, interpolate,
-                       is_dist_avail_and_initialized, inverse_sigmoid)
+                       is_dist_avail_and_initialized, inverse_sigmoid,
+                       _max_by_axis)
 
 from .backbone import build_backbone
 from .matcher import build_matcher
 from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
                            dice_loss, sigmoid_focal_loss)
-from .transformer import build_transformer
+from .fs_transformer import build_transformer
+#from .transformer import build_transformer
+
+
+class AttentionPool2d(nn.Module):
+    """https://huggingface.co/spaces/Roll20/pet_score/blob/88b06a51ba63f586dad6548231ba0f8b6c1c44ec/lib/timm/models/layers/attention_pool2d.py"""
+    """ Attention based 2D feature pooling w/ learned (absolute) pos embedding.
+    This is a multi-head attention based replacement for (spatial) average pooling in NN architectures.
+    It was based on impl in CLIP by OpenAI
+    https://github.com/openai/CLIP/blob/3b473b0e682c091a9e53623eebc1ca1657385717/clip/model.py
+    NOTE: This requires feature size upon construction and well prevent adaptive sizing of the network.
+    """
+    def __init__(
+            self,
+            in_features: int,
+            feat_size: tuple[int, int],
+            out_features: int = None,
+            embed_dim: int = None,
+            num_heads: int = 4,
+            qkv_bias: bool = True,
+    ):
+        super().__init__()
+
+        embed_dim = embed_dim or in_features
+        out_features = out_features or in_features
+        assert embed_dim % num_heads == 0
+        self.feat_size = feat_size
+        self.qkv = nn.Linear(in_features, embed_dim * 3, bias=qkv_bias)
+        self.proj = nn.Linear(embed_dim, out_features)
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        spatial_dim = self.feat_size[0] * self.feat_size[1]
+        self.pos_embed = nn.Parameter(torch.zeros(spatial_dim + 1, in_features))
+        trunc_normal_(self.pos_embed, std=in_features ** -0.5)
+        trunc_normal_(self.qkv.weight, std=in_features ** -0.5)
+        nn.init.zeros_(self.qkv.bias)
+
+    def forward(self, x):
+        B, _, H, W = x.shape
+        N = H * W
+        assert self.feat_size[0] == H
+        assert self.feat_size[1] == W
+        x = x.reshape(B, -1, N).permute(0, 2, 1)
+        x = torch.cat([x.mean(1, keepdim=True), x], dim=1)
+        x = x + self.pos_embed.unsqueeze(0).to(x.dtype)
+
+        x = self.qkv(x).reshape(B, N + 1, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = x[0], x[1], x[2]
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+
+        x = (attn @ v).transpose(1, 2).reshape(B, N + 1, -1)
+        x = self.proj(x)
+        return x[:, 0]
 
 
 class ConditionalDETR(nn.Module):
@@ -32,20 +91,23 @@ class ConditionalDETR(nn.Module):
     def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
         """ Initializes the model.
         Parameters:
-            backbone: torch module of the backbone to be used. See backbone.py
-            transformer: torch module of the transformer architecture. See transformer.py
-            num_classes: number of object classes
-            num_queries: number of object queries, ie detection slot. This is the maximal number of objects
-                         Conditional DETR can detect in a single image. For COCO, we recommend 100 queries.
+            backbone:           torch module of the backbone to be used. See backbone.py
+            transformer:        torch module of the transformer architecture. See transformer.py
+            num_classes:        number of object classes
+            num_queries:        number of object queries, ie detection slot. This is the maximal number of objects
+                                Conditional DETR can detect in a single image. For COCO, we recommend 100 queries.
+            num_pseudo_class:   number of pseudo class embeddings
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
         super().__init__()
         self.num_queries = num_queries
+        self.num_classes = num_classes
         self.transformer = transformer
         hidden_dim = transformer.d_model
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+        self.pseudo_class_embed = nn.Embedding(num_classes, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
         self.aux_loss = aux_loss
@@ -55,15 +117,18 @@ class ConditionalDETR(nn.Module):
         bias_value = -math.log((1 - prior_prob) / prior_prob)
         self.class_embed.bias.data = torch.ones(num_classes) * bias_value
 
+        self.attn_pooling = AttentionPool2d(self.backbone.num_channels, (4, 4), hidden_dim)
+
         # init bbox_mebed
         nn.init.constant_(self.bbox_embed.layers[-1].weight.data, 0)
         nn.init.constant_(self.bbox_embed.layers[-1].bias.data, 0)
 
-    def forward(self, samples: NestedTensor):
+    def forward(self, samples: NestedTensor, templates: list[dict[int, torch.Tensor]],
+                label2pseudo: Optional[dict[int, int]]) -> NestedTensor:
         """ The forward expects a NestedTensor, which consists of:
                - samples.tensor: batched images, of shape [batch_size x 3 x H x W]
                - samples.mask: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
-               - samples.templates: a binary mask of shape [batch_size x H x W], containing 1 on padded pixels
+               - templates: [batch_size num_classes x num_templates x 3 x H x W]
 
             It returns a dict with the following elements:
                - "pred_logits": the classification logits (including no-object) for all queries.
@@ -77,16 +142,24 @@ class ConditionalDETR(nn.Module):
         """
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
+
         # Image FEature Extractor
         features, pos = self.backbone(samples)
-
-        ## To ADD +++ a way to extract features from the templates ###########
-        ## To ADD +++ a way to extract features from the templates ###########
-        ## To ADD +++ a way to extract features from the templates ###########
-
         src, mask = features[-1].decompose()
+
+        # select random pseudo_class embeddings
+
+        if label2pseudo is None:
+            label2pseudo = self.select_random_pseudo_classes(templates)
+
+        # get features from templates
+        template_features = self.prepare_templates(templates, label2pseudo)
+
         assert mask is not None
-        hs, reference = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])
+        hs, reference = self.transformer(self.input_proj(src), template_features, mask, None, self.query_embed.weight, pos[-1])
+        # only use object features and discard template features
+        hs = hs[:, :, template_features.shape[1]:]
+        reference = reference[:, template_features.shape[1]:, :]
         
         reference_before_sigmoid = inverse_sigmoid(reference)
         outputs_coords = []
@@ -102,6 +175,43 @@ class ConditionalDETR(nn.Module):
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         return out
+
+    def select_random_pseudo_classes(self, templates, no_obj_class=0):
+        """
+        :param templates: The templates
+        :return: A list of indices representing the pseudo classes
+        """
+        classes = set()
+        for bt in templates:
+            classes.update(list(bt.keys()))
+        classes.remove(no_obj_class)
+
+        max_num_classes = len(classes)  # total number of classes present in the batch
+        pseudo_classes = np.random.choice(range(self.num_classes - 2), max_num_classes, replace=False)
+        label2pseudo = {c: int(p) for c, p in zip(classes, pseudo_classes)}
+        # append last class as no object class
+        label2pseudo[no_obj_class] = self.num_classes-1
+
+        return label2pseudo
+
+    def prepare_templates(self, templates, l2e):
+        templ = []
+
+        for b_temp in templates:
+            t = []
+            cls_embeddings = []
+            for cls, tensor in b_temp.items():
+                cls_embeddings.append(torch.repeat_interleave(self.pseudo_class_embed.weight[l2e[cls]][None,], len(tensor), dim=0))
+                t.append(tensor)
+            class_embedding = torch.concatenate(cls_embeddings)
+            t = torch.concatenate(t)
+            t = nested_tensor_from_tensor(t)
+            template_features, template_masks = self.backbone(t)
+            t, templ_mask = template_features[-1].decompose()
+            t = self.attn_pooling(t)
+            t = t + class_embedding
+            templ.append(t)
+        return torch.stack(templ)
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):

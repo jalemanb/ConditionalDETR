@@ -336,6 +336,13 @@ def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
     return NestedTensor(tensor, mask)
 
 
+def nested_tensor_from_tensor(t: Tensor):
+    b, c, h, w = t.shape
+    device = t[0].device
+    mask = torch.zeros((b, h, w), dtype=torch.bool, device=device)
+    return NestedTensor(t, mask)
+
+
 # _onnx_nested_tensor_from_tensor_list() is an implementation of
 # nested_tensor_from_tensor_list() that is supported by ONNX tracing.
 @torch.jit.unused
