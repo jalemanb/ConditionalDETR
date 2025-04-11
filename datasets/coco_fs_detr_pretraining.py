@@ -204,10 +204,12 @@ class ConvertCocoPolysToMask(object):
         # In here I get the number of unique labels 
         present_labels = torch.unique(classes[k_random_indices]).tolist()
         # Creating a list of the templates, each element of the list is a batched set of templates from the same class
-        templates_list = []
+        # templates_list = []
+        templates_dict = {}
         for label in present_labels:
             label_indices = (classes[k_random_indices] == label).nonzero(as_tuple=True)[0]
-            templates_list.append(templates_batch[label_indices].clone())
+            # templates_list.append(templates_batch[label_indices].clone())
+            templates_dict[int(label)] = templates_batch[label_indices].clone()
 
         if self.return_masks:
             masks = masks[keep]
@@ -240,7 +242,7 @@ class ConvertCocoPolysToMask(object):
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
         target["size"] = torch.as_tensor([int(h), int(w)])
 
-        return image, templates_list, target
+        return image, templates_dict, target
 
 
 def make_coco_transforms(image_set):
