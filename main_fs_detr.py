@@ -118,6 +118,7 @@ def main(args):
     run = wandb.init(
         # Set the wandb project where this run will be logged.
         project="FS DETR REID",
+        group="DDP",
         # Track hyperparameters and run metadata.
         config={
             "learning_rate": args.lr,
@@ -262,6 +263,7 @@ def main(args):
                         torch.save(coco_evaluator.coco_eval["bbox"].eval,
                                    output_dir / "eval" / name)
     run.finish()
+    wandb.finish()
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
