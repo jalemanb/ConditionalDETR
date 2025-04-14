@@ -49,7 +49,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         outputs = model(samples, templates, label2pseudo)
 
         for i, target in enumerate(targets):
-            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']])
+            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']], device = device)
 
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
