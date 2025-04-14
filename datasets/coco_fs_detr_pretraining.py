@@ -18,7 +18,6 @@ import torch
 import torch.utils.data
 import torchvision
 from pycocotools import mask as coco_mask
-import selective_search
 import datasets.transforms as T
 import numpy as np
 import torchvision.models as models

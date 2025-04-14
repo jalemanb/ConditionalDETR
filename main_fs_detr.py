@@ -116,10 +116,8 @@ def main(args):
     # Start a new wandb run to track this script.
     now = datetime.datetime.now()
     run = wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
-        entity="ULTIMATE FS",
         # Set the wandb project where this run will be logged.
-        project="Reimplementation of FS-DETR",
+        project="FS DETR REID",
         # Track hyperparameters and run metadata.
         config={
             "learning_rate": args.lr,
