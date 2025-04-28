@@ -176,7 +176,7 @@ class ConditionalDETR(nn.Module):
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         return out
 
-    def select_random_pseudo_classes(self, templates, no_obj_class=0):
+    def select_random_pseudo_classes(self, templates):
         """
         :param templates: The templates
         :return: A list of indices representing the pseudo classes
@@ -184,14 +184,12 @@ class ConditionalDETR(nn.Module):
         classes = set()
         for bt in templates:
             classes.update(list(bt.keys()))
-        classes.remove(no_obj_class)
+
 
         max_num_classes = len(classes)  # total number of classes present in the batch
-        pseudo_classes = np.random.choice(range(self.num_classes - 2), max_num_classes, replace=False)
+        pseudo_classes = np.random.choice(range(self.num_classes), max_num_classes, replace=False)
         label2pseudo = {c: int(p) for c, p in zip(classes, pseudo_classes)}
         # append last class as no object class
-        label2pseudo[no_obj_class] = self.num_classes-1
-
         return label2pseudo
 
     def prepare_templates(self, templates, l2e):
