@@ -119,8 +119,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         outputs = model(samples, templates, label2pseudo)
 
         for i, target in enumerate(targets):
-            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']])
-
+            targets[i]['labels'] = torch.tensor([label2pseudo[int(l)] for l in target['labels']], dtype = torch.long, device = device)
+            
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
 

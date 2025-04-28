@@ -172,8 +172,6 @@ class ConvertCocoPolysToMask(object):
 
         pick_k_boxes = self.k # np.minimum(torch.randint(1, self.k + 1, (1,)).item(), boxes.shape[0])
 
-        k_random_indices = torch.randperm(boxes.shape[0])[:pick_k_boxes]
-
         if self.return_masks:
             segmentations = [obj["segmentation"] for obj in anno]
             masks = convert_coco_poly_to_mask(segmentations, h, w)
@@ -189,6 +187,8 @@ class ConvertCocoPolysToMask(object):
         keep = (boxes[:, 3] > boxes[:, 1]) & (boxes[:, 2] > boxes[:, 0])
         boxes = boxes[keep]
         classes = classes[keep]
+
+        k_random_indices = torch.randperm(boxes.shape[0])[:pick_k_boxes]
 
         #  Extract the patches and normalize them to create the binary labels object/no object
         templates = []
