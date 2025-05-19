@@ -42,10 +42,11 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         templates = [{k: v.to(device) for k, v in t.items()} for t in templates]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        try:
-            label2pseudo = model.select_random_pseudo_classes(templates)
-        except Exception:  # model is DDP
+        if hasattr(model, "module"): # If the training is happening in multiple GPU nodes
             label2pseudo = model.module.select_random_pseudo_classes(templates)
+        else:
+            label2pseudo = model.select_random_pseudo_classes(templates)
+            
         outputs = model(samples, templates, label2pseudo)
 
         for i, target in enumerate(targets):
@@ -112,10 +113,11 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         templates = [{k: v.to(device) for k, v in t.items()} for t in templates]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        try:
-            label2pseudo = model.select_random_pseudo_classes(templates)
-        except Exception:  # model is DDP
+        if hasattr(model, "module"): # If the training is happening in multiple GPU nodes
             label2pseudo = model.module.select_random_pseudo_classes(templates)
+        else:
+            label2pseudo = model.select_random_pseudo_classes(templates)
+
         outputs = model(samples, templates, label2pseudo)
 
         for i, target in enumerate(targets):

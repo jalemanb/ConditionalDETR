@@ -185,7 +185,6 @@ class ConditionalDETR(nn.Module):
         for bt in templates:
             classes.update(list(bt.keys()))
 
-
         max_num_classes = len(classes)  # total number of classes present in the batch
         pseudo_classes = np.random.choice(range(self.num_classes), max_num_classes, replace=False)
         label2pseudo = {c: int(p) for c, p in zip(classes, pseudo_classes)}
