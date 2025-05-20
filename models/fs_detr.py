@@ -153,10 +153,10 @@ class ConditionalDETR(nn.Module):
             label2pseudo = self.select_random_pseudo_classes(templates)
 
         # get features from templates
-        template_features = self.prepare_templates(templates, label2pseudo)
+        template_features, template_mask = self.prepare_templates(templates, label2pseudo)
 
         assert mask is not None
-        hs, reference = self.transformer(self.input_proj(src), template_features, mask, None, self.query_embed.weight, pos[-1])
+        hs, reference = self.transformer(self.input_proj(src), template_features, mask, template_mask, self.query_embed.weight, pos[-1])
 
 
         # only use object features and discard template features
@@ -210,7 +210,15 @@ class ConditionalDETR(nn.Module):
             t = self.attn_pooling(t)
             t = t + class_embedding
             templ.append(t)
-        return torch.stack(templ)
+        #return torch.nested.nested_tensor(templ, layout=torch.jagged, device=templ[0].device, dtype=templ[0].dtype), None
+        max_num_tmpls_in_batch = max(*[tmps.shape[0] for tmps in templ])
+
+        mask = torch.ones((len(templates), max_num_tmpls_in_batch), dtype=torch.bool, device=t.device)
+        padded_templates = torch.zeros((len(templ), max_num_tmpls_in_batch, templ[0].shape[-1]))
+        for i, t in enumerate(templ):
+            padded_templates[i, :t.shape[0], :t.shape[1]].copy_(t)
+            mask[i, :t.shape[0]] = False
+        return padded_templates, mask
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):

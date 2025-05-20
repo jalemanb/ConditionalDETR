@@ -83,15 +83,23 @@ class FSTransformer(nn.Module):
         templates = templates.permute(1, 0, 2)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
         query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+
+        tgt_key_padding_mask = torch.concatenate([template_mask, torch.zeros((bs, query_embed.shape[0]), dtype=torch.bool)], dim=1)
         query_embed = torch.concatenate([templates, query_embed], dim=0)
+
+        decoder_attn_mask = tgt_key_padding_mask[:,None].repeat(1,src.shape[0], 1).permute(0,2,1)
+        decoder_attn_mask = torch.repeat_interleave(decoder_attn_mask, torch.tensor([self.nhead, self.nhead]), dim=0)
+        #decoder_attn_mask = torch.ones((bs*self.nhead, query_embed.shape[0], src.shape[0]), device=src.device, dtype=torch.bool)
+        #for i in range(0, bs*self.nhead, self.nhead):
+        #    decoder_attn_mask[i:i+self.nhead, ]
         mask = mask.flatten(1)
 
         #template_mask = template_mask.permute(1, 0, 2)
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, templates, src_key_padding_mask=mask, template_padding_mask=template_mask, pos=pos_embed)
-        hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
+        hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask, tgt_key_padding_mask=tgt_key_padding_mask,
+                          pos=pos_embed, query_pos=query_embed, memory_mask=decoder_attn_mask)
         return hs, references
 
 
