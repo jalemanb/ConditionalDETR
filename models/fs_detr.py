@@ -157,6 +157,8 @@ class ConditionalDETR(nn.Module):
 
         assert mask is not None
         hs, reference = self.transformer(self.input_proj(src), template_features, mask, None, self.query_embed.weight, pos[-1])
+
+
         # only use object features and discard template features
         hs = hs[:, :, template_features.shape[1]:]
         reference = reference[:, template_features.shape[1]:, :]
