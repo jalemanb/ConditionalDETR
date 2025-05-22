@@ -373,6 +373,7 @@ def multi_head_attention_forward(query: Tensor,
 
     attn_output_weights = softmax(
         attn_output_weights, dim=-1)
+    attn_output_weights = torch.where(attn_output_weights != attn_output_weights, 0.0, attn_output_weights)
     attn_output_weights = dropout(attn_output_weights, p=dropout_p, training=training)
 
     attn_output = torch.bmm(attn_output_weights, v)

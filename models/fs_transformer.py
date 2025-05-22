@@ -86,9 +86,10 @@ class FSTransformer(nn.Module):
 
         tgt_key_padding_mask = torch.concatenate([template_mask, torch.zeros((bs, query_embed.shape[0]), dtype=torch.bool)], dim=1)
         query_embed = torch.concatenate([templates, query_embed], dim=0)
-
+        tgt_mask = torch.stack([m[None].T @ m[None] for m in tgt_key_padding_mask.type(torch.int)]).type(torch.bool)
+        tgt_mask = torch.repeat_interleave(tgt_mask, torch.tensor([self.nhead for _ in range(bs)]), dim=0)
         decoder_attn_mask = tgt_key_padding_mask[:,None].repeat(1,src.shape[0], 1).permute(0,2,1)
-        decoder_attn_mask = torch.repeat_interleave(decoder_attn_mask, torch.tensor([self.nhead, self.nhead]), dim=0)
+        decoder_attn_mask = torch.repeat_interleave(decoder_attn_mask, torch.tensor([self.nhead for _ in range(bs)]), dim=0)
         #decoder_attn_mask = torch.ones((bs*self.nhead, query_embed.shape[0], src.shape[0]), device=src.device, dtype=torch.bool)
         #for i in range(0, bs*self.nhead, self.nhead):
         #    decoder_attn_mask[i:i+self.nhead, ]
@@ -98,8 +99,8 @@ class FSTransformer(nn.Module):
 
         tgt = torch.zeros_like(query_embed)
         memory = self.encoder(src, templates, src_key_padding_mask=mask, template_padding_mask=template_mask, pos=pos_embed)
-        hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask, tgt_key_padding_mask=tgt_key_padding_mask,
-                          pos=pos_embed, query_pos=query_embed, memory_mask=decoder_attn_mask)
+        hs, references = self.decoder(tgt, memory, memory_key_padding_mask=mask, tgt_mask=tgt_mask,
+                          pos=pos_embed, query_pos=query_embed, memory_mask=decoder_attn_mask, num_templates=templates.shape[0])
         return hs, references
 
 
@@ -149,7 +150,8 @@ class TransformerDecoder(nn.Module):
                 tgt_key_padding_mask: Optional[Tensor] = None,
                 memory_key_padding_mask: Optional[Tensor] = None,
                 pos: Optional[Tensor] = None,
-                query_pos: Optional[Tensor] = None):
+                query_pos: Optional[Tensor] = None,
+                num_templates = 0):
         output = tgt
 
         intermediate = []
@@ -174,7 +176,7 @@ class TransformerDecoder(nn.Module):
                            tgt_key_padding_mask=tgt_key_padding_mask,
                            memory_key_padding_mask=memory_key_padding_mask,
                            pos=pos, query_pos=query_pos, query_sine_embed=query_sine_embed,
-                           is_first=(layer_id == 0))
+                           is_first=(layer_id == 0), num_templates=num_templates)
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
 
@@ -428,13 +430,15 @@ class TransformerDecoderLayer(nn.Module):
                 pos: Optional[Tensor] = None,
                 query_pos: Optional[Tensor] = None,
                 query_sine_embed = None,
-                is_first = False):
+                is_first = False,
+                num_templates = 0):
         if self.normalize_before:
             raise NotImplementedError
             return self.forward_pre(tgt, memory, tgt_mask, memory_mask,
                                     tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos)
         return self.forward_post(tgt, memory, tgt_mask, memory_mask,
-                                 tgt_key_padding_mask, memory_key_padding_mask, pos, query_pos, query_sine_embed, is_first)
+                                 tgt_key_padding_mask, memory_key_padding_mask,
+                                 pos, query_pos, query_sine_embed, is_first, num_templates)
 
 
 def _get_clones(module, N):

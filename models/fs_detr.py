@@ -104,6 +104,7 @@ class ConditionalDETR(nn.Module):
         self.num_classes = num_classes
         self.transformer = transformer
         hidden_dim = transformer.d_model
+        self.hidden_dim = hidden_dim
         self.class_embed = nn.Linear(hidden_dim, num_classes)
         self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
@@ -210,11 +211,10 @@ class ConditionalDETR(nn.Module):
             t = self.attn_pooling(t)
             t = t + class_embedding
             templ.append(t)
-        #return torch.nested.nested_tensor(templ, layout=torch.jagged, device=templ[0].device, dtype=templ[0].dtype), None
-        max_num_tmpls_in_batch = max(*[tmps.shape[0] for tmps in templ])
+        max_num_tmpls_in_batch = max([tmps.shape[0] for tmps in templ])
 
         mask = torch.ones((len(templates), max_num_tmpls_in_batch), dtype=torch.bool, device=t.device)
-        padded_templates = torch.zeros((len(templ), max_num_tmpls_in_batch, templ[0].shape[-1]))
+        padded_templates = torch.zeros((len(templ), max_num_tmpls_in_batch, self.hidden_dim))
         for i, t in enumerate(templ):
             padded_templates[i, :t.shape[0], :t.shape[1]].copy_(t)
             mask[i, :t.shape[0]] = False
