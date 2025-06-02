@@ -69,7 +69,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
         present_labels = torch.unique(target["labels"]).tolist()
 
-        print("Present Classes", present_labels)
+        # print("Present Classes", present_labels)
 
         templates_dict = {}
 
