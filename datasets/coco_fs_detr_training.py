@@ -45,7 +45,16 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             torchT.Normalize(mean=[0.485, 0.456, 0.406],
                             std=[0.229, 0.224, 0.225])
         ])
-        
+
+        remove_imgs = []
+        for idx, image_id in enumerate(self.ids):
+            ann_ids = self.coco.getAnnIds(imgIds=image_id)
+            anns = self.coco.loadAnns(ann_ids)
+            if len(anns) == 0:
+                remove_imgs.append(image_id)
+                continue
+        self.ids = [idx for idx in self.ids if idx not in remove_imgs]
+
         # Build class_id -> list of dataset indices (not image_ids)
         self.class_to_indices = defaultdict(list)
 
@@ -57,7 +66,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             for class_id in class_ids:
                 self.class_to_indices[class_id].append(idx)
 
-        
+
     def __getitem__(self, idx):
         img, target = super(CocoDetection, self).__getitem__(idx)
         image_id = self.ids[idx]
@@ -65,7 +74,11 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
         img, target = self.prepare(img, target)
         if self._transforms is not None:
-            img, target = self._transforms(img, target)
+            i, t = self._transforms(img, target)
+            # make sure that after transforming, the target remains
+            while t["labels"].shape[0] == 0 and target['labels'].shape[0] > 0:
+                i, t = self._transforms(img, target)
+            img, target = i, t
 
         present_labels = torch.unique(target["labels"]).tolist()
 
