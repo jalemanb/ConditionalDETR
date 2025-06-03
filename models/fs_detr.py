@@ -197,14 +197,33 @@ class ConditionalDETR(nn.Module):
     def prepare_templates(self, templates, l2e):
         templ = []
 
+        print("Batch SIZE", len(templates))
+        for i, b_temp in enumerate(templates):
+            print(f"Batch {i}", b_temp.keys())
+            for template_list in b_temp.values():
+                print("Template list size:", len(template_list))
+
+        
         for b_temp in templates:
             t = []
             cls_embeddings = []
             for cls, tensor in b_temp.items():
+                print("tensor len", len(tensor))
                 cls_embeddings.append(torch.repeat_interleave(self.pseudo_class_embed.weight[l2e[cls]][None,], len(tensor), dim=0))
                 t.append(tensor)
-            class_embedding = torch.concatenate(cls_embeddings)
-            t = torch.concatenate(t)
+            
+            print("class embedding", len(cls_embeddings))
+            for cls_emb in cls_embeddings:
+                print("cls_emb_shape", cls_emb.shape)
+                print("HURRA")
+
+
+            if len(cls_embeddings) == 0:
+                print(f"[Rank {torch.distributed.get_rank()}] WARNING: Empty cls_embeddings!")
+                # exit()
+
+            class_embedding = torch.cat(cls_embeddings)
+            t = torch.cat(t)
             t = nested_tensor_from_tensor(t)
             template_features, template_masks = self.backbone(t)
             t, templ_mask = template_features[-1].decompose()

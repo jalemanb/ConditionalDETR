@@ -80,16 +80,16 @@ class FSTransformer(nn.Module):
         # flatten NxCxHxW to HWxNxC
         bs, c, h, w = src.shape
         src = src.flatten(2).permute(2, 0, 1)
-        templates = templates.permute(1, 0, 2)
+        templates = templates.permute(1, 0, 2).to(src.device)
         pos_embed = pos_embed.flatten(2).permute(2, 0, 1)
-        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
+        query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1).to(src.device)
 
-        tgt_key_padding_mask = torch.concatenate([template_mask, torch.zeros((bs, query_embed.shape[0]), dtype=torch.bool)], dim=1)
+        tgt_key_padding_mask = torch.concatenate([template_mask, torch.zeros((bs, query_embed.shape[0]), dtype=torch.bool).to(src.device)], dim=1)
         query_embed = torch.concatenate([templates, query_embed], dim=0)
-        tgt_mask = torch.stack([m[None].T @ m[None] for m in tgt_key_padding_mask.type(torch.int)]).type(torch.bool)
-        tgt_mask = torch.repeat_interleave(tgt_mask, torch.tensor([self.nhead for _ in range(bs)]), dim=0)
+        tgt_mask = torch.stack([m[None].T @ m[None] for m in tgt_key_padding_mask.type(torch.float32)]).type(torch.bool)
+        tgt_mask = torch.repeat_interleave(tgt_mask, torch.tensor([self.nhead for _ in range(bs)]).to(src.device), dim=0)
         decoder_attn_mask = tgt_key_padding_mask[:,None].repeat(1,src.shape[0], 1).permute(0,2,1)
-        decoder_attn_mask = torch.repeat_interleave(decoder_attn_mask, torch.tensor([self.nhead for _ in range(bs)]), dim=0)
+        decoder_attn_mask = torch.repeat_interleave(decoder_attn_mask, torch.tensor([self.nhead for _ in range(bs)]).to(src.device), dim=0)
         #decoder_attn_mask = torch.ones((bs*self.nhead, query_embed.shape[0], src.shape[0]), device=src.device, dtype=torch.bool)
         #for i in range(0, bs*self.nhead, self.nhead):
         #    decoder_attn_mask[i:i+self.nhead, ]
