@@ -197,30 +197,13 @@ class ConditionalDETR(nn.Module):
     def prepare_templates(self, templates, l2e):
         templ = []
 
-        print("Batch SIZE", len(templates))
-        for i, b_temp in enumerate(templates):
-            print(f"Batch {i}", b_temp.keys())
-            for template_list in b_temp.values():
-                print("Template list size:", len(template_list))
-
         
         for b_temp in templates:
             t = []
             cls_embeddings = []
             for cls, tensor in b_temp.items():
-                print("tensor len", len(tensor))
                 cls_embeddings.append(torch.repeat_interleave(self.pseudo_class_embed.weight[l2e[cls]][None,], len(tensor), dim=0))
                 t.append(tensor)
-            
-            print("class embedding", len(cls_embeddings))
-            for cls_emb in cls_embeddings:
-                print("cls_emb_shape", cls_emb.shape)
-                print("HURRA")
-
-
-            if len(cls_embeddings) == 0:
-                print(f"[Rank {torch.distributed.get_rank()}] WARNING: Empty cls_embeddings!")
-                # exit()
 
             class_embedding = torch.cat(cls_embeddings)
             t = torch.cat(t)
@@ -490,7 +473,7 @@ def build(args):
     # you should pass `num_classes` to be 2 (max_obj_id + 1).
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
-    num_classes = 21 if args.dataset_file != 'coco' else 91
+    num_classes = 81 if args.dataset_file != 'coco' else 91
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter
