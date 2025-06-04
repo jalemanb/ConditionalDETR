@@ -27,11 +27,12 @@ import random
 from collections import defaultdict
 
 class CocoDetection(torchvision.datasets.CocoDetection):
-    def __init__(self, img_folder, ann_file, transforms, return_masks, k = 3):
+    def __init__(self, img_folder, ann_file, transforms, return_masks, max_classes = 3, k_templates = 3):
         super(CocoDetection, self).__init__(img_folder, ann_file)
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks = return_masks)
-        self.k = k # Number of templates per class present in image
+        self.k_templates = k_templates # Number of templates per class present in image
+        self.max_classes = max_classes
 
         # Transform for image patches
         self.patch_augmentation = torchT.Compose([
@@ -82,7 +83,27 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
         present_labels = torch.unique(target["labels"]).tolist()
 
-        # print("Present Classes", present_labels)
+        print("Present Labels Original", present_labels)
+
+        # In this code a maximum number of classes per image is encouraged 
+        # Images containing more than the alowed number of classes will remove 
+        # the labels and bounding boxes from excenedent random classes
+        if len(present_labels) > self.max_classes:
+
+            # Shuffle the list for random selection
+            random.shuffle(present_labels)
+
+            # Create the two subsets
+            allowed_classes = present_labels[:self.max_classes]
+            left_over_classes = present_labels[self.max_classes:]
+
+            valid_mask = torch.isin(target["labels"], torch.tensor(allowed_classes))
+
+            # Updating & limiting the ammount of classess per image
+            target["labels"] = target["labels"][valid_mask]
+            target["boxes"] = target["boxes"][valid_mask]
+            present_labels = allowed_classes
+
 
         templates_dict = {}
 
@@ -93,7 +114,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
             templates = []
 
 
-            for _ in range(self.k):
+            for _ in range(self.k_templates):
 
                 img_id_t = random.choice(img_ids_t)
                 img_t, target_t = super(CocoDetection, self).__getitem__(img_id_t)
