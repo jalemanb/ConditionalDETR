@@ -83,7 +83,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
         present_labels = torch.unique(target["labels"]).tolist()
 
-        print("Present Labels Original", present_labels)
+        # print("Present Labels Original", present_labels)
 
         # In this code a maximum number of classes per image is encouraged 
         # Images containing more than the alowed number of classes will remove 
